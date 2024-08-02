@@ -1,0 +1,102 @@
+# Install necessary libraries
+!pip install opencv-python-headless tensorflow tqdm streamlit pandas Pillow scikit-learn pyngrok
+
+# Mount Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+
+# Copy the dataset from Google Drive to the current directory
+!cp /content/drive/MyDrive/archive\ \(2\).zip /content/
+
+# Unzip the dataset
+!unzip /content/archive\ \(2\).zip -d /content/Fashion-Recommender-system/
+
+# Prepare and Train the Neural Network
+import tensorflow as tf
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+# Set up the image data generator
+datagen = ImageDataGenerator(rescale=1./255, validation_split=0.2)
+
+# Load the dataset
+train_data = datagen.flow_from_directory(
+    '/content/Fashion-Recommender-system/path_to_your_dataset', 
+    target_size=(224, 224), 
+    batch_size=32, 
+    class_mode='categorical', 
+    subset='training'
+)
+
+val_data = datagen.flow_from_directory(
+    '/content/Fashion-Recommender-system/path_to_your_dataset', 
+    target_size=(224, 224), 
+    batch_size=32, 
+    class_mode='categorical', 
+    subset='validation'
+)
+
+# Load ResNet50 model pre-trained on ImageNet
+base_model = ResNet50(weights='imagenet', include_top=False)
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+predictions = Dense(train_data.num_classes, activation='softmax')(x)
+
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# Freeze the layers of ResNet50
+for layer in base_model.layers:
+    layer.trainable = False
+
+# Compile the model
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Train the model
+model.fit(train_data, epochs=10, validation_data=val_data)
+
+# Generate Inventory Embeddings
+import numpy as np
+from sklearn.neighbors import NearestNeighbors
+import pickle
+
+# Generate embeddings for the inventory
+embeddings = model.predict(train_data)
+with open('image_features_embedding.pkl', 'wb') as f:
+    pickle.dump(embeddings, f)
+
+# Build and Test the Recommender System
+from sklearn.metrics.pairwise import cosine_similarity
+
+def get_recommendations(input_image):
+    input_embedding = model.predict(input_image)
+    similarities = cosine_similarity(input_embedding, embeddings)
+    top_indices = np.argsort(similarities[0])[-5:]
+    return top_indices
+
+# Develop the Web Application
+import streamlit as st
+from PIL import Image
+
+st.title("Fashion Recommender System")
+uploaded_file = st.file_uploader("Choose an image...", type="jpg")
+if uploaded_file is not None:
+    image = Image.open(uploaded_file)
+    st.image(image, caption='Uploaded Image.', use_column_width=True)
+    st.write("")
+    st.write("Generating recommendations...")
+    recommendations = get_recommendations(image)
+    for idx in recommendations:
+        st.image(inventory_images[idx], caption=f"Recommendation {idx}", use_column_width=True)
+
+# Run the Streamlit App
+from pyngrok import ngrok
+
+# Start the Streamlit app
+!streamlit run app.py &
+
+# Create a public URL
+public_url = ngrok.connect(port='8501')
+public_url
